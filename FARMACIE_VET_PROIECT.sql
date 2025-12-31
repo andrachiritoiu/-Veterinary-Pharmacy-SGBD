@@ -675,3 +675,311 @@ INSERT INTO INCLUDE VALUES (17,2,40);
 
 COMMIT;
 
+SET SERVEROUTPUT ON;
+
+--ex.6.un subprogram cu 3 colectii
+CREATE OR REPLACE PROCEDURE ex6_tip_campanie(
+    prm_tip IN  CAMPANIE.tip%TYPE
+)
+IS
+    --record
+    TYPE rec_interventie IS RECORD(
+        data_int INTERVINE.data_interventiei%TYPE,
+        medic VARCHAR2(120),
+        obs INTERVINE.observatii%TYPE,
+        zi NUMBER(2)
+    );
+    
+    --nested table
+    TYPE t_interventii IS TABLE OF rec_interventie;
+    v_interventii t_interventii;
+    
+    --index by table
+    TYPE t_animale IS TABLE OF t_interventii 
+    INDEX BY VARCHAR2(200);
+    
+    v_animale t_animale;
+    
+    
+    TYPE t_campanii IS TABLE OF t_animale 
+    INDEX BY VARCHAR2(200);
+    
+    v_campanii t_campanii;
+    
+    --varray
+    TYPE v_zile IS VARRAY(31) OF NUMBER;
+    contor_zile v_zile := v_zile();
+    
+    gasit BOOLEAN := FALSE;
+    k_campanie VARCHAR2(200);
+    k_animal   VARCHAR2(200);
+    
+BEGIN
+    FOR i IN 1..31 LOOP
+        contor_zile.EXTEND;
+        contor_zile(i) := 0;
+    END LOOP;
+    
+    --campaniile de tipul cerut care au interventii
+    FOR camp IN(
+        SELECT DISTINCT c.id_campanie, c.nume, c.tip, c.data_start, c.data_sfarsit
+        FROM CAMPANIE c
+        JOIN INTERVINE i ON i.id_campanie=c.id_campanie
+        WHERE LOWER(c.tip) = LOWER(prm_tip)
+        ORDER BY c.id_campanie
+    )LOOP
+        gasit := TRUE;
+        
+        --cheie campanie
+        k_campanie := camp.nume || ' [' || camp.tip || '] (' ||
+                  TO_CHAR(camp.data_start,'YYYY-MM-DD') || ' - ' ||
+                  TO_CHAR(camp.data_sfarsit,'YYYY-MM-DD') || ')';
+              
+        v_animale.DELETE; 
+        
+        FOR animl IN(
+            SELECT DISTINCT a.id_animal, a.nume, a.specie, a.rasa
+            FROM ANIMAL a
+            JOIN INTERVINE i ON i.id_animal = a.id_animal
+            WHERE i.id_campanie = camp.id_campanie
+            ORDER BY a.id_animal 
+        )LOOP
+        
+            k_animal := animl.nume || ' (' || animl.specie || ', ' || animl.rasa || ', ID=' || animl.id_animal || ')';
+    
+            --interventiile fiecarui animal
+            SELECT i.data_interventiei, pm.prenume || ' ' || pm.nume, i.observatii, EXTRACT(DAY FROM i.data_interventiei)
+            BULK COLLECT INTO v_interventii
+            FROM INTERVINE i
+            JOIN PERSONAL_MEDICAL pm ON pm.id_personal_medical = i.id_personal_medical
+            WHERE i.id_campanie = camp.id_campanie AND i.id_animal = animl.id_animal
+            ORDER BY i.data_interventiei;
+    
+            v_animale(k_animal) := v_interventii;
+            
+            --actualizam controul de zile
+            FOR j IN 1..v_interventii.COUNT LOOP
+                IF v_interventii(j).zi BETWEEN 1 AND 31 THEN
+                    contor_zile(v_interventii(j).zi) := contor_zile(v_interventii(j).zi)+1;
+                END IF;
+            END LOOP;
+        
+        END LOOP;
+        
+        v_campanii(k_campanie) := v_animale;
+    END LOOP; 
+    
+    IF NOT gasit THEN
+        DBMS_OUTPUT.PUT_LINE('Nu exista campanii de tipul: ' || prm_tip || ' sau nu exista interventii pentru acestea.');
+        RETURN;
+    END IF;
+    
+    
+    --afisare
+    k_campanie := v_campanii.FIRST;
+    
+    WHILE k_campanie IS NOT NULL LOOP
+        DBMS_OUTPUT.PUT_LINE('Campanie: ' || k_campanie);
+        
+        v_animale := v_campanii(k_campanie);
+        k_animal := v_animale.FIRST;
+        
+        WHILE k_animal IS NOT NULL LOOP
+            DBMS_OUTPUT.PUT_LINE('  Animal: ' || k_animal);
+            
+            v_interventii := v_animale(k_animal);
+            
+            FOR j IN 1..v_interventii.COUNT LOOP
+                DBMS_OUTPUT.PUT_LINE(
+                    '    - ' || TO_CHAR(v_interventii(j).data_int,'YYYY-MM-DD') ||
+                    ' | ' || v_interventii(j).medic ||
+                    ' | ' || NVL(v_interventii(j).obs,'(fara observatii)')
+                );
+            END LOOP;
+            
+        k_animal := v_animale.NEXT(k_animal);
+        END LOOP;
+        
+        DBMS_OUTPUT.NEW_LINE;
+        k_campanie := v_campanii.NEXT(k_campanie);
+    END LOOP;
+    
+    DBMS_OUTPUT.PUT_LINE('- Total interventii pe zile (1..31) -');
+    FOR i IN 1..31 LOOP
+        IF contor_zile(i)=1 THEN
+             DBMS_OUTPUT.PUT_LINE('Ziua ' || i || ': o interventie.');
+        ELSIF contor_zile(i)>1 THEN
+             DBMS_OUTPUT.PUT_LINE('Ziua ' || i || ': ' || contor_zile(i) || ' interventii.');
+        END IF;      
+    END LOOP;
+    
+EXCEPTION
+  WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Eroare: ' || SQLERRM);
+
+END ex6_tip_campanie;
+/
+
+
+--APEL
+BEGIN
+  ex6_tip_campanie('Vaccinare');
+  DBMS_OUTPUT.NEW_LINE;
+  ex6_tip_campanie('Adoptie');
+END;
+/
+
+
+
+
+--ex7.subprogram cu 2 cursoare
+CREATE OR REPLACE PROCEDURE ex7_comenzi(
+    p_data_start IN DATE,
+    p_data_sfarsit IN DATE
+)
+IS
+    --exceptie personalizata
+    ex_fara_comenzi EXCEPTION;
+    nr_comenzi NUMBER := 0;
+    
+    --cursor clasic(explicit)
+    CURSOR c_detalii(p_id_comanda COMANDA.id_comanda%TYPE) IS
+        SELECT m.denumire, a.cantitate, a.pret_vanzare_final, a.discount
+        FROM ARE a
+        JOIN STOC s ON s.id_stoc = a.id_stoc
+        JOIN MEDICAMENT m ON m.id_medicament = s.id_medicament
+        WHERE a.id_comanda = p_id_comanda
+        ORDER BY m.denumire;
+        
+        detalii_comanda c_detalii%ROWTYPE;
+
+BEGIN
+    --ciclu cursor cu subcerere
+    FOR comanda IN (
+        SELECT c.id_comanda, c.data_comanda, cl.prenume || ' ' || cl.nume AS client, cc.metoda_plata
+        FROM COMANDA c
+        JOIN COMANDA_CLIENT cc ON cc.id_comanda = c.id_comanda
+        JOIN CLIENT cl ON cl.id_client = cc.id_client
+        WHERE  c.data_comanda BETWEEN p_data_start AND p_data_sfarsit
+        ORDER BY c.id_comanda
+    )LOOP
+    
+        nr_comenzi := nr_comenzi+1;
+    
+        DBMS_OUTPUT.PUT_LINE('Comanda #' || comanda.id_comanda || ' (' || TO_CHAR(comanda.data_comanda,'YYYY-MM-DD') || ')');
+        DBMS_OUTPUT.PUT_LINE('Client: ' || comanda.client);
+        DBMS_OUTPUT.PUT_LINE('Metoda plata: ' || comanda.metoda_plata);
+        DBMS_OUTPUT.PUT_LINE('Produse (medicamente):');
+    
+        OPEN c_detalii(comanda.id_comanda); 
+        FETCH c_detalii INTO detalii_comanda;
+        
+        IF c_detalii%FOUND THEN
+            LOOP
+                 DBMS_OUTPUT.PUT_LINE(
+                    '  - ' || detalii_comanda.denumire ||
+                    ' | cant=' || detalii_comanda.cantitate ||
+                    ' | pret_final=' || detalii_comanda.pret_vanzare_final ||
+                    ' | disc=' || detalii_comanda.discount || '%'
+                );
+                
+                FETCH c_detalii INTO detalii_comanda;
+                EXIT WHEN c_detalii%NOTFOUND;
+                
+             END LOOP;
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('  (nu exista medicamente asociate acestei comenzi)');
+        END IF;
+        
+        CLOSE c_detalii;
+        
+        DBMS_OUTPUT.NEW_LINE;
+
+    END LOOP;
+    
+    IF nr_comenzi = 0 THEN
+        RAISE ex_fara_comenzi;
+    ELSIF nr_comenzi = 1 THEN
+        DBMS_OUTPUT.PUT_LINE('Au fost afisate informatii despre o singura comanda.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Au fost afisate informatii despre ' || nr_comenzi || ' comenzi.');
+    END IF;
+
+
+EXCEPTION
+ WHEN ex_fara_comenzi THEN
+        DBMS_OUTPUT.PUT_LINE('Nu au fost gasite comenzi in intervalul specificat.');   
+ WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Eroare: ' || SQLERRM);
+
+END ex7_comenzi;
+/
+
+
+--APEL
+BEGIN
+  --nu  sunt comenzi
+  ex7_comenzi(DATE '2024-01-01', DATE '2024-01-31'); 
+  DBMS_OUTPUT.NEW_LINE;
+  --sunt comenzi
+  ex7_comenzi(DATE '2025-04-01', DATE '2025-04-30'); 
+END;
+/
+
+
+
+
+--ex8.functie cu 3 tabele intr-o singura comanda SQL care trateaza toate exceptiile
+CREATE OR REPLACE FUNCTION ex8_metoda_plata(
+    p_nume IN CLIENT.nume%TYPE,
+    p_prenume IN CLIENT.prenume%TYPE
+)
+RETURN VARCHAR2
+IS
+    v_metoda COMANDA_CLIENT.metoda_plata%type;
+    v_nr_comenzi NUMBER;
+    v_ultima_data DATE;
+
+BEGIN
+    SELECT cc.metoda_plata,
+           COUNT(DISTINCT co.id_comanda) AS nr_comenzi,
+           MAX(co.data_comanda) AS ultima_data
+    INTO v_metoda, v_nr_comenzi, v_ultima_data
+    FROM CLIENT c
+    JOIN COMANDA_CLIENT cc ON cc.id_client = c.id_client
+    JOIN COMANDA co ON co.id_comanda = cc.id_comanda
+    WHERE LOWER(c.nume) = LOWER(p_nume) AND 
+          LOWER(c.prenume) = LOWER(p_prenume)
+    GROUP BY cc.metoda_plata;
+          
+    RETURN 'Metoda=' || v_metoda
+           || ', comenzi=' || v_nr_comenzi
+           || ', ultima=' || TO_CHAR(v_ultima_data, 'YYYY-MM-DD');  
+   
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RETURN 'NO_DATA_FOUND: client inexistent sau fara comenzi';
+    WHEN TOO_MANY_ROWS THEN
+        RETURN 'TOO_MANY_ROWS: clientul are comenzi cu metode de plata diferite';
+    WHEN OTHERS THEN
+        RETURN 'ALTA EROARE: ' || SQLERRM;
+END;
+/
+
+--APEL
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('Caz normal: ' || ex8_metoda_plata('Popescu', 'Ana'));
+  DBMS_OUTPUT.NEW_LINE;
+
+  DBMS_OUTPUT.PUT_LINE(ex8_metoda_plata('Nume', 'Inexistent'));
+  DBMS_OUTPUT.NEW_LINE;
+
+  DBMS_OUTPUT.PUT_LINE(ex8_metoda_plata('Ionescu', 'Vlad'));
+
+END;
+/
+
+
+
+
+
