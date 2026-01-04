@@ -18,6 +18,8 @@ CREATE SEQUENCE seq_factura START WITH 1;
 
 CREATE SEQUENCE seq_interventie START WITH 1;
 
+CREATE SEQUENCE seq_cod_eroare START WITH 1;
+CREATE SEQUENCE seq_log_eroare START WITH 1;
 
 
 --creare tabele
@@ -208,6 +210,43 @@ CREATE TABLE INTERVINE (
   FOREIGN KEY (id_personal_medical) REFERENCES MEDIC_VETERINAR(id_personal_medical)
 );
 
+CREATE TABLE CODURI_EROARE (
+  id_cod_eroare      INT DEFAULT seq_cod_eroare.NEXTVAL PRIMARY KEY,
+  cod_eroare         NUMBER(6) NOT NULL UNIQUE,
+  descriere          VARCHAR2(200) NOT NULL,
+  entitate_afectata  VARCHAR2(50) NOT NULL,
+  data_creare        DATE DEFAULT SYSDATE NOT NULL
+);
+
+CREATE TABLE LOG_EROARE (
+  id_log             INT DEFAULT seq_log_eroare.NEXTVAL PRIMARY KEY,
+  cod_eroare         NUMBER(6) NOT NULL,
+  mesaj              VARCHAR2(300) NOT NULL,
+  utilizator         VARCHAR2(30) DEFAULT USER NOT NULL,
+  data_log           DATE DEFAULT SYSDATE NOT NULL,
+  CONSTRAINT fk_log_cod
+    FOREIGN KEY (cod_eroare)
+    REFERENCES CODURI_EROARE(cod_eroare)
+);
+
+
+CREATE OR REPLACE PROCEDURE insereaza_eroare(
+  p_cod   IN NUMBER,
+  p_mesaj IN VARCHAR2
+) IS
+  PRAGMA AUTONOMOUS_TRANSACTION;
+BEGIN
+  INSERT INTO LOG_EROARE(cod_eroare, mesaj)
+  VALUES (p_cod, SUBSTR(p_mesaj, 1, 300));
+
+  COMMIT;
+EXCEPTION
+  WHEN OTHERS THEN
+    ROLLBACK;
+END;
+/
+
+
 
 
 
@@ -373,6 +412,15 @@ VALUES (DATE '2026-07-31', DATE '2025-03-01', 50, 50, 28, DATE '2025-03-15', 18,
 INSERT INTO STOC (data_expirare, data_fabricatie, nr_bucati_primite, nr_bucati_ramase, pret_vanzare_curent, data_aprovizionare, pret_achizitie, id_medicament)
 VALUES (DATE '2027-06-30', DATE '2025-07-01', 70, 70, 58, DATE '2025-07-10', 42, 2);
 
+INSERT INTO STOC (data_expirare, data_fabricatie, nr_bucati_primite, nr_bucati_ramase, pret_vanzare_curent, data_aprovizionare, pret_achizitie, id_medicament)
+VALUES (DATE '2027-12-31', DATE '2025-10-01', 100, 100, 50, DATE '2025-10-15', 30, 1);
+
+INSERT INTO STOC (data_expirare, data_fabricatie, nr_bucati_primite, nr_bucati_ramase, pret_vanzare_curent, data_aprovizionare, pret_achizitie, id_medicament)
+VALUES (DATE '2023-06-30', DATE '2022-01-01', 20, 20, 45, DATE '2023-01-15', 25, 1);
+
+INSERT INTO STOC (data_expirare, data_fabricatie, nr_bucati_primite, nr_bucati_ramase, pret_vanzare_curent, data_aprovizionare, pret_achizitie, id_medicament)
+VALUES (DATE '2027-05-31', DATE '2025-09-01', 5, 5, 60, DATE '2025-09-10', 35, 1);
+
 
 
 INSERT INTO CONSULTATIE (pret, id_animal, id_personal_medical) VALUES (150,1,1);
@@ -427,7 +475,7 @@ INSERT INTO COMANDA_CLIENT VALUES (8,'cash',8);
 INSERT INTO COMANDA_CLIENT VALUES (9,'card',9);
 INSERT INTO COMANDA_CLIENT VALUES (10,'cash',10);
 INSERT INTO COMANDA_CLIENT VALUES (11,'card',1);
-INSERT INTO COMANDA_CLIENT VALUES (12,'cash',2);
+INSERT INTO COMANDA_CLIENT VALUES (12,'card',2);
 
 
 INSERT INTO COMANDA_FARMACIE VALUES (13, DATE '2025-05-10', 1);
@@ -678,6 +726,18 @@ COMMIT;
 SET SERVEROUTPUT ON;
 
 --ex.6.un subprogram cu 3 colectii
+INSERT INTO CODURI_EROARE(cod_eroare, descriere, entitate_afectata)
+SELECT -20001,
+       'Nu exista campanii de tipul cerut sau nu exista interventii.',
+       'CAMPANIE/INTERVINE'
+FROM DUAL
+WHERE NOT EXISTS(
+    SELECT 1
+    FROM CODURI_EROARE
+    WHERE cod_eroare = -20001
+);
+COMMIT;
+
 CREATE OR REPLACE PROCEDURE ex6_tip_campanie(
     prm_tip IN  CAMPANIE.tip%TYPE
 )
@@ -770,8 +830,10 @@ BEGIN
     END LOOP; 
     
     IF NOT gasit THEN
-        DBMS_OUTPUT.PUT_LINE('Nu exista campanii de tipul: ' || prm_tip || ' sau nu exista interventii pentru acestea.');
-        RETURN;
+        RAISE_APPLICATION_ERROR(
+        -20001,
+        'Nu exista campanii de tipul: ' || prm_tip || ' sau nu exista interventii pentru acestea.'
+        );
     END IF;
     
     
@@ -816,6 +878,7 @@ BEGIN
 EXCEPTION
   WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('Eroare: ' || SQLERRM);
+        RAISE;
 
 END ex6_tip_campanie;
 /
@@ -833,13 +896,22 @@ END;
 
 
 --ex7.subprogram cu 2 cursoare
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20002,
+       'Nu exista comenzi in intervalul specificat.',
+       'COMANDA/COMANDA_CLIENT'
+FROM dual
+WHERE NOT EXISTS (
+    SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20002
+);
+
+COMMIT;
+
 CREATE OR REPLACE PROCEDURE ex7_comenzi(
     p_data_start IN DATE,
     p_data_sfarsit IN DATE
 )
 IS
-    --exceptie personalizata
-    ex_fara_comenzi EXCEPTION;
     nr_comenzi NUMBER := 0;
     
     --cursor clasic(explicit)
@@ -898,7 +970,7 @@ BEGIN
     END LOOP;
     
     IF nr_comenzi = 0 THEN
-        RAISE ex_fara_comenzi;
+        RAISE_APPLICATION_ERROR(-20002, 'Nu au fost gasite comenzi in intervalul specificat.');
     ELSIF nr_comenzi = 1 THEN
         DBMS_OUTPUT.PUT_LINE('Au fost afisate informatii despre o singura comanda.');
     ELSE
@@ -906,11 +978,11 @@ BEGIN
     END IF;
 
 
+
 EXCEPTION
- WHEN ex_fara_comenzi THEN
-        DBMS_OUTPUT.PUT_LINE('Nu au fost gasite comenzi in intervalul specificat.');   
  WHEN OTHERS THEN
         DBMS_OUTPUT.PUT_LINE('Eroare: ' || SQLERRM);
+        RAISE;
 
 END ex7_comenzi;
 /
@@ -919,17 +991,39 @@ END ex7_comenzi;
 --APEL
 BEGIN
   --nu  sunt comenzi
-  ex7_comenzi(DATE '2024-01-01', DATE '2024-01-31'); 
+  BEGIN
+    ex7_comenzi(DATE '2024-01-01', DATE '2024-01-31');
+  EXCEPTION
+    WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('Test eroare OK: ' || SQLERRM);
+  END;
+
   DBMS_OUTPUT.NEW_LINE;
+
   --sunt comenzi
-  ex7_comenzi(DATE '2025-04-01', DATE '2025-04-30'); 
+  ex7_comenzi(DATE '2025-04-01', DATE '2025-04-30');
 END;
 /
 
 
 
 
+
 --ex8.functie cu 3 tabele intr-o singura comanda SQL care trateaza toate exceptiile
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20003, 'Client inexistent sau fara comenzi.', 'CLIENT/COMANDA_CLIENT/COMANDA'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20003);
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20004, 'Clientul are comenzi cu metode de plata diferite.', 'COMANDA_CLIENT'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20004);
+
+COMMIT;
+
+
 CREATE OR REPLACE FUNCTION ex8_metoda_plata(
     p_nume IN CLIENT.nume%TYPE,
     p_prenume IN CLIENT.prenume%TYPE
@@ -958,28 +1052,470 @@ BEGIN
    
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
-        RETURN 'NO_DATA_FOUND: client inexistent sau fara comenzi';
+        RAISE_APPLICATION_ERROR(-20003, 'Client inexistent sau fara comenzi.');
+
     WHEN TOO_MANY_ROWS THEN
-        RETURN 'TOO_MANY_ROWS: clientul are comenzi cu metode de plata diferite';
+        RAISE_APPLICATION_ERROR(-20004, 'Clientul are comenzi cu metode de plata diferite.');
+
     WHEN OTHERS THEN
-        RETURN 'ALTA EROARE: ' || SQLERRM;
+        RAISE_APPLICATION_ERROR(-20099, 'Alta eroare: ' || SQLERRM);
 END;
 /
 
 --APEL
 BEGIN
-  DBMS_OUTPUT.PUT_LINE('Caz normal: ' || ex8_metoda_plata('Popescu', 'Ana'));
+  --caz normal
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Caz normal: ' || ex8_metoda_plata('Popescu', 'Ana'));
+  EXCEPTION
+    WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('Eroare (nu trebuia aici): ' || SQLERRM);
+  END;
+
   DBMS_OUTPUT.NEW_LINE;
 
-  DBMS_OUTPUT.PUT_LINE(ex8_metoda_plata('Nume', 'Inexistent'));
+  --caz NO_DATA_FOUND (client inexistent / fara comenzi)
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Caz NO_DATA_FOUND: ' || ex8_metoda_plata('Nume', 'Inexistent'));
+  EXCEPTION
+    WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('Caz NO_DATA_FOUND OK: ' || SQLERRM);
+  END;
+
   DBMS_OUTPUT.NEW_LINE;
 
-  DBMS_OUTPUT.PUT_LINE(ex8_metoda_plata('Ionescu', 'Vlad'));
+  --caz TOO_MANY_ROWS (metode plata diferite)
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Caz TOO_MANY_ROWS: ' || ex8_metoda_plata('Ionescu', 'Vlad'));
+  EXCEPTION
+    WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('Caz TOO_MANY_ROWS OK: ' || SQLERRM);
+  END;
+END;
+/
+
+
+
+
+--ex9.procedura cu 5 tabele si 2 exceptii personalizate
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20005, 'Stoc insuficient pentru cel putin un produs din comanda.', 'ARE/STOC'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20005);
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20006, 'Comanda nu exista sau nu contine produse (ARE).', 'COMANDA/ARE'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20006);
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20007, 'Exista cel putin un lot expirat in comanda.', 'STOC'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20007);
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20008, 'Factura exista deja pentru comanda data.', 'FACTURA'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20008);
+
+COMMIT;
+
+
+
+CREATE OR REPLACE PROCEDURE ex9_emitere_factura(
+    p_id_comanda IN COMANDA.id_comanda%TYPE,
+    p_data_emitere IN DATE
+)
+IS
+    v_suma_total NUMBER(12,2);
+    v_nr_produse NUMBER;
+    v_insuficiente NUMBER;
+    v_expirate NUMBER;
+    v_metoda_de_plata COMANDA_CLIENT.metoda_plata%TYPE;
+    v_facturi_exist NUMBER;
+    v_client VARCHAR2(120);
+    
+BEGIN
+    SELECT COUNT(*)
+    INTO v_facturi_exist
+    FROM FACTURA
+    WHERE id_comanda = p_id_comanda;
+    
+    IF v_facturi_exist>0 THEN
+        RAISE_APPLICATION_ERROR(-20008, 'Factura exista deja pentru comanda ' || p_id_comanda || '.');
+    END IF;
+    
+    SELECT  cl.prenume || ' ' || cl.nume AS client,
+            cc.metoda_plata,
+            NVL(SUM(a.pret_vanzare_final * a.cantitate),0) AS total,
+            COUNT(*) AS nr_produse,
+            SUM(CASE WHEN a.cantitate > s.nr_bucati_ramase THEN 1 ELSE 0 END) AS insuficiente,
+            SUM(CASE WHEN s.data_expirare < p_data_emitere THEN 1 ELSE 0 END) AS expirate
+    INTO v_client, v_metoda_de_plata, v_suma_total, v_nr_produse, v_insuficiente, v_expirate
+    FROM CLIENT cl
+    JOIN COMANDA_CLIENT cc ON cc.id_client = cl.id_client
+    JOIN COMANDA c ON c.id_comanda = cc.id_comanda
+    JOIN ARE a ON a.id_comanda = c.id_comanda
+    JOIN STOC s ON s.id_stoc = a.id_stoc
+    WHERE c.id_comanda = p_id_comanda
+    GROUP BY cl.prenume, cl.nume, cc.metoda_plata;
+    
+    IF v_nr_produse = 0 THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Comanda ' || p_id_comanda || ' nu contine produse.');
+    END IF;
+    
+     IF v_insuficiente > 0 THEN
+        RAISE_APPLICATION_ERROR(-20005, 'Stoc insuficient pentru comanda ' || p_id_comanda || '.');
+    END IF;
+
+    IF v_expirate > 0 THEN
+        RAISE_APPLICATION_ERROR(-20007, 'Comanda ' || p_id_comanda || ' contine loturi expirate.');
+    END IF;
+    
+    --emitere factura
+    INSERT INTO FACTURA(data_emitere, suma, id_comanda)
+    VALUES (p_data_emitere, v_suma_total, p_id_comanda);
+    
+    DBMS_OUTPUT.PUT_LINE('Factura emisa cu succes pentru comanda ' || p_id_comanda || '.');
+    DBMS_OUTPUT.PUT_LINE('Client: ' || v_client || ', metoda plata: ' || v_metoda_de_plata || ', suma: ' || v_suma_total);
+
+EXCEPTION
+     WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20006, 'Comanda ' || p_id_comanda || ' nu exista sau nu contine produse.');
+
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Eroare: ' || SQLERRM);
+        RAISE;
+
+END ex9_emitere_factura;
+/
+
+--APEL
+--1)emitere factura
+SELECT id_stoc, data_expirare, nr_bucati_ramase
+FROM STOC
+ORDER BY id_stoc;
+
+SELECT id_stoc, nr_bucati_ramase
+FROM STOC
+WHERE id_stoc = 21;
+
+--creare comanda 
+DECLARE
+  v_id_comanda NUMBER;
+BEGIN
+  INSERT INTO COMANDA (data_comanda, id_personal_medical)
+  VALUES (SYSDATE, 3)
+  RETURNING id_comanda INTO v_id_comanda;
+
+  INSERT INTO COMANDA_CLIENT (id_comanda, metoda_plata, id_client)
+  VALUES (v_id_comanda, 'cash', 1);
+
+  INSERT INTO ARE (id_comanda, id_stoc, cantitate, pret_vanzare_final, discount)
+  VALUES (v_id_comanda, 21, 2, 50, 0);
+
+  COMMIT;
+
+  DBMS_OUTPUT.PUT_LINE('COMANDA NORMALA = ' || v_id_comanda);
+
+  ex9_emitere_factura(v_id_comanda, SYSDATE);
+END;
+
+
+--2)factura exista deja
+BEGIN
+  ex9_emitere_factura(21, SYSDATE);
+END;
+/
+
+--3)stoc insuficient
+SELECT id_stoc, nr_bucati_ramase
+FROM STOC
+WHERE id_stoc = 23;
+
+
+DECLARE
+  v_id_comanda NUMBER;
+BEGIN
+  INSERT INTO COMANDA (data_comanda, id_personal_medical)
+  VALUES (SYSDATE, 4)
+  RETURNING id_comanda INTO v_id_comanda;
+
+  INSERT INTO COMANDA_CLIENT (id_comanda, metoda_plata, id_client)
+  VALUES (v_id_comanda, 'card', 2);
+
+  INSERT INTO ARE (id_comanda, id_stoc, cantitate, pret_vanzare_final, discount)
+  VALUES (v_id_comanda, 23, 10, 60, 0);
+
+  COMMIT;
+
+  DBMS_OUTPUT.PUT_LINE('COMANDA STOC INSUFICIENT = ' || v_id_comanda);
+
+  ex9_emitere_factura(v_id_comanda, SYSDATE);
+END;
+/
+
+--4)lot expirat
+SELECT id_stoc, data_expirare
+FROM STOC
+WHERE id_stoc = 22;
+
+DECLARE
+  v_id_comanda NUMBER;
+BEGIN
+  INSERT INTO COMANDA (data_comanda, id_personal_medical)
+  VALUES (SYSDATE, 6)
+  RETURNING id_comanda INTO v_id_comanda;
+
+  INSERT INTO COMANDA_CLIENT (id_comanda, metoda_plata, id_client)
+  VALUES (v_id_comanda, 'cash', 3);
+
+  INSERT INTO ARE (id_comanda, id_stoc, cantitate, pret_vanzare_final, discount)
+  VALUES (v_id_comanda, 22, 1, 40, 0);
+
+  COMMIT;
+
+  DBMS_OUTPUT.PUT_LINE('COMANDA LOT EXPIRAT = ' || v_id_comanda);
+
+  ex9_emitere_factura(v_id_comanda, SYSDATE);
+END;
+/
+
+--5)comanda nu exista
+BEGIN
+  ex9_emitere_factura(9999, SYSDATE);
+END;
+/
+
+
+--ex10.trigger LMD la nivel de comanda
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20009,
+       'Operatiile asupra FACTURA sunt permise doar intre orele 09:00 si 17:00.',
+       'FACTURA'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20009);
+
+
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20010,
+       'Operatiile asupra FACTURA sunt interzise in ziua de duminica.',
+       'FACTURA'
+FROM dual
+WHERE NOT EXISTS (SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20010);
+
+COMMIT;
+
+
+CREATE OR REPLACE TRIGGER trg_ex10_factura_program
+BEFORE INSERT OR UPDATE OR DELETE ON FACTURA
+DECLARE
+    v_now DATE := SYSDATE;
+    v_hhmi NUMBER;
+    v_zi VARCHAR2(20);
+    v_op VARCHAR2(10);
+    v_user VARCHAR2(30);
+    v_msg VARCHAR2(300);
+BEGIN
+     v_user := SYS_CONTEXT('USERENV','SESSION_USER');
+     v_hhmi := TO_NUMBER(TO_CHAR(v_now, 'HH24MI'));
+     
+      v_zi := UPPER(TO_CHAR(v_now, 'DAY', 'NLS_DATE_LANGUAGE=ROMANIAN'));
+      v_zi := RTRIM(v_zi);
+      v_zi := REPLACE(v_zi, 'Ă', 'A');
+      
+      IF INSERTING THEN
+            v_op := 'INSERT';
+      ELSIF UPDATING THEN
+            v_op := 'UPDATE';
+      ELSE
+            v_op := 'DELETE';
+      END IF;
+      
+      IF v_zi = 'DUMINICA' THEN
+        v_msg := 'Operatie ' || v_op || ' interzisa duminica, user=' || v_user ||
+             ', moment=' || TO_CHAR(v_now,'YYYY-MM-DD HH24:MI');
+         insereaza_eroare(-20010, v_msg);
+         RAISE_APPLICATION_ERROR(-20010, v_msg);
+      END IF;
+      
+       IF v_hhmi < 900 OR v_hhmi >= 1700 THEN
+            v_msg := 'Operatie ' || v_op ||
+                ' interzisa in afara programului (09:00-17:00), user=' || v_user ||
+                ', ora curenta=' || TO_CHAR(v_now,'HH24:MI');
+            insereaza_eroare(-20009, v_msg);
+            RAISE_APPLICATION_ERROR(-20009, v_msg);
+  END IF;
 
 END;
 /
 
 
+--APEL
+--1)UPDATE
+UPDATE FACTURA
+SET suma = 1000
+WHERE id_factura = (SELECT MIN(id_factura) FROM FACTURA);
+
+
+--2)INSERT
+INSERT INTO FACTURA (id_comanda, data_emitere, suma)
+VALUES ( 
+    (SELECT MIN(id_comanda) FROM COMANDA),SYSDATE, 0
+);
+
+
+--3)DELETE
+DELETE FROM FACTURA
+WHERE id_factura = 10;
+
+
+
+
+--ex11.trigger LMD la nivel de linie
+INSERT INTO CODURI_EROARE (cod_eroare, descriere, entitate_afectata)
+SELECT -20011, 'Eroare la actualizarea stocului in triggerul de gestiune a facturilor.', 'STOC/FACTURA'
+FROM dual
+WHERE NOT EXISTS (
+  SELECT 1 FROM CODURI_EROARE WHERE cod_eroare = -20011
+);
+
+COMMIT;
+
+
+CREATE OR REPLACE TRIGGER ex11_actualizare_stoc
+FOR INSERT OR DELETE ON FACTURA
+
+--pentru a evita muttating table
+COMPOUND TRIGGER
+    --variabila globala
+    v_incasari NUMBER(12,2) := 0;
+    
+    AFTER EACH ROW IS
+    --variabile locale
+        v_nr_produse_comanda NUMBER;
+        v_probleme NUMBER;
+        v_user VARCHAR2(30);
+        v_msg VARCHAR2(300);
+        
+    BEGIN
+         v_user := SYS_CONTEXT('USERENV','SESSION_USER');
+         
+         IF INSERTING THEN
+            --comanda are produse
+            SELECT COUNT(*)
+            INTO v_nr_produse_comanda 
+            FROM ARE
+            WHERE id_comanda = :NEW.id_comanda;
+         
+            IF v_nr_produse_comanda = 0 THEN
+                v_msg := 'Factura nu poate fi emisa: comanda ' || :NEW.id_comanda ||
+                    ' nu contine produse (ARE). User=' || v_user;
+                insereaza_eroare(-20006, v_msg);
+                RAISE_APPLICATION_ERROR(-20006, v_msg);
+            END IF;
+            
+            --verificare stoc
+            SELECT COUNT(*)
+            INTO v_probleme
+            FROM ARE a 
+            JOIN STOC s ON s.id_stoc = a.id_stoc
+            WHERE a.id_comanda = :NEW.id_comanda 
+                AND a.cantitate > s.nr_bucati_ramase;
+                
+            IF v_probleme > 0 THEN
+                v_msg := 'Stoc insuficient la emiterea facturii pentru comanda ' ||
+                    :NEW.id_comanda || '. User=' || v_user;
+                insereaza_eroare(-20005, v_msg);
+                RAISE_APPLICATION_ERROR(-20005, v_msg);
+            END IF;    
+                
+            --scadere stoc
+            UPDATE STOC s
+            SET s.nr_bucati_ramase = s.nr_bucati_ramase - (
+                SELECT a.cantitate
+                FROM ARE a
+                WHERE a.id_comanda = :NEW.id_comanda
+                    AND a.id_stoc = s.id_stoc
+            )
+            --actualizeza doar stocurile care exista in comanda facturata
+            WHERE EXISTS(
+                SELECT 1
+                FROM ARE a
+                WHERE a.id_comanda = :NEW.id_comanda
+                    AND a.id_stoc = s.id_stoc
+            );
+            
+            v_incasari := v_incasari + :NEW.suma;
+        
+         
+        ELSIF DELETING THEN
+            UPDATE STOC s
+            SET s.nr_bucati_ramase = s.nr_bucati_ramase + (
+                SELECT a.cantitate
+                FROM ARE a
+                WHERE a.id_comanda = :OLD.id_comanda
+                    AND a.id_stoc = s.id_stoc
+            )
+            WHERE EXISTS(
+                SELECT 1
+                FROM ARE a
+                WHERE a.id_comanda = :OLD.id_comanda
+                    AND a.id_stoc = s.id_stoc
+            );
+            
+            v_incasari := v_incasari - :OLD.suma;
+    
+        END IF;
+        
+     EXCEPTION
+        WHEN OTHERS THEN
+            v_msg := 'Eroare in trigger EX11 (actualizare stoc). ' || SQLERRM;
+            insereaza_eroare(-20011, v_msg);
+            RAISE;   
+    END AFTER EACH ROW;
+    
+    AFTER STATEMENT IS
+        BEGIN
+            DBMS_OUTPUT.PUT_LINE('Delta incasari pentru statementul curent pe FACTURA = ' ||
+                                NVL(v_incasari, 0) || ' RON'
+                                );
+  END AFTER STATEMENT;
+
+END;
+/
+   
+   
+ALTER TRIGGER trg_ex10_factura_program DISABLE;    
+ALTER TRIGGER trg_ex10_factura_program ENABLE;
+
+--APEL       
+--1)insert
+SELECT s.id_stoc, s.nr_bucati_ramase, a.cantitate
+FROM ARE a 
+JOIN STOC s ON s.id_stoc = a.id_stoc
+WHERE a.id_comanda = 1
+ORDER BY s.id_stoc;
+
+DELETE FROM FACTURA
+WHERE id_comanda = 1;
+COMMIT;
+
+INSERT INTO FACTURA(id_comanda, data_emitere, suma)
+VALUES (1, SYSDATE, 50);
+COMMIT;
+
+SELECT s.id_stoc, s.nr_bucati_ramase, a.cantitate
+FROM ARE a JOIN STOC s ON s.id_stoc = a.id_stoc
+WHERE a.id_comanda = 1
+ORDER BY s.id_stoc;
+
+--2)delete
+
+
+    
+    
+    
 
 
 
