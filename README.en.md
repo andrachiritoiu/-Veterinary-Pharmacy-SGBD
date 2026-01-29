@@ -126,6 +126,6 @@ The project includes a **complex PL/SQL package** that manages the pharmacy repl
    - triggers;
    - PL/SQL package.
 3. Enable output display:
-   ```sql
+```sql
    SET SERVEROUTPUT ON;
 ```
