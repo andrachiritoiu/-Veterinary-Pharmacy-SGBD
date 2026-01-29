@@ -326,6 +326,7 @@ END pachet_ex13_reaprov;
 
 
 --APEL
+--TEST 1
 --1)inserare prag
 BEGIN 
     pachet_ex13_reaprov.seteaza_prag_medicament(1, 20);
@@ -368,10 +369,52 @@ ORDER BY id_raport DESC;
 
 
 -- 4) afiseaza ultimul raport
+BEGIN
+  pachet_ex13_reaprov.afiseaza_raport(1);
+END;
+/
+
+
+
+
+--TEST 2
+--setare prag
+BEGIN
+  pachet_ex13_reaprov.seteaza_prag_medicament(7, 40);
+  pachet_ex13_reaprov.seteaza_prag_medicament(5, 50);
+  pachet_ex13_reaprov.seteaza_prag_medicament(10, 60);
+  pachet_ex13_reaprov.seteaza_prag_medicament(9, 70);
+  pachet_ex13_reaprov.seteaza_prag_medicament(6, 80);
+  pachet_ex13_reaprov.seteaza_prag_medicament(8, 100);
+  pachet_ex13_reaprov.seteaza_prag_medicament(2, 130);
+  pachet_ex13_reaprov.seteaza_prag_medicament(1, 400);
+END;
+/
+
+--verificare prag
+SELECT *
+FROM prag_reaprovizionare
+WHERE id_medicament IN (7,5,10,9,6,8,2,1)
+ORDER BY id_medicament;
+
+--generare raport
+BEGIN
+  pachet_ex13_reaprov.genereaza_raport_reaprov(10, 30, 'N', 30);
+END;
+/
+
+
+--afisare ultim raport
 DECLARE
   v_id NUMBER;
 BEGIN
   SELECT MAX(id_raport) INTO v_id FROM raport_reaprovizionare;
   pachet_ex13_reaprov.afiseaza_raport(v_id);
 END;
+/
+
+  SELECT MAX(id_raport) INTO v_id FROM raport_reaprovizionare;
+  pachet_ex13_reaprov.afiseaza_raport(v_id);
+END;
+
 /  
